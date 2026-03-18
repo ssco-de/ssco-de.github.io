@@ -417,7 +417,7 @@
         </p>
       </div>
       <div class="controls">
-        <button id="startBtn">Enable Motion</button>
+        <button id="startBtn">Enable Sensors</button>
         <button id="calibrateBtn">Recenter</button>
         <button id="demoBtn">Demo Mode</button>
       </div>
@@ -467,7 +467,7 @@
 
         <div class="stats">
           <div class="stat">
-            <div class="label">Yaw (Z / alpha)</div>
+            <div class="label">Yaw (display)</div>
             <div class="value" id="yawValue">0.0°</div>
           </div>
           <div class="stat">
@@ -475,8 +475,20 @@
             <div class="value" id="pitchValue">0.0°</div>
           </div>
           <div class="stat">
-            <div class="label">Roll (Y / gamma)</div>
+            <div class="label">Roll (display)</div>
             <div class="value" id="rollValue">0.0°</div>
+          </div>
+          <div class="stat">
+            <div class="label">Compass heading</div>
+            <div class="value" id="headingValue">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">Location</div>
+            <div class="value" id="locationValue">—</div>
+          </div>
+          <div class="stat">
+            <div class="label">GPS accuracy</div>
+            <div class="value" id="accuracyValue">—</div>
           </div>
           <div class="stat">
             <div class="label">Sensor updates</div>
@@ -487,13 +499,14 @@
         <div class="small">
           Notes:
           <br />• On iPhone/iPad, motion access usually needs a button press and permission prompt.
-          <br />• Browser orientation data may be less stable than a native ARCore/ARKit app.
+          <br />• Compass heading is best-effort only and depends on the browser exposing absolute heading data.
+          <br />• Location does not truly calibrate orientation by itself; it mainly gives position and GPS accuracy.
           <br />• This demo shows a twin of the phone’s <strong>rotation</strong>, not full position tracking.
         </div>
 
         <div class="log" id="log">
-No motion data yet.
-Tap “Enable Motion” and allow sensor access.
+No sensor data yet.
+Tap “Enable Sensors” and allow motion/location access.
         </div>
       </aside>
     </div>
@@ -510,6 +523,9 @@ Tap “Enable Motion” and allow sensor access.
     const pitchValue = document.getElementById('pitchValue');
     const rollValue = document.getElementById('rollValue');
     const fpsValue = document.getElementById('fpsValue');
+    const headingValue = document.getElementById('headingValue');
+    const locationValue = document.getElementById('locationValue');
+    const accuracyValue = document.getElementById('accuracyValue');
     const log = document.getElementById('log');
     const statusText = document.getElementById('statusText');
     const statusDot = document.getElementById('statusDot');
@@ -517,7 +533,7 @@ Tap “Enable Motion” and allow sensor access.
     const calibrateBtn = document.getElementById('calibrateBtn');
     const demoBtn = document.getElementById('demoBtn');
 
-    let latest = { alpha: 0, beta: 0, gamma: 0 };
+    let latest = { alpha: 0, beta: 0, gamma: 0, heading: null, latitude: null, longitude: null, accuracy: null };
     let smoothed = { alpha: 0, beta: 0, gamma: 0 };
     let offset = { alpha: 0, beta: 0, gamma: 0 };
     let lastSecond = performance.now();
@@ -547,14 +563,32 @@ Tap “Enable Motion” and allow sensor access.
     }
 
     function updateUI(alpha, beta, gamma) {
-      yawValue.textContent = `${alpha.toFixed(1)}°`;
+      yawValue.textContent = `${gamma.toFixed(1)}°`;
       pitchValue.textContent = `${beta.toFixed(1)}°`;
-      rollValue.textContent = `${gamma.toFixed(1)}°`;
+      rollValue.textContent = `${alpha.toFixed(1)}°`;
+
+      if (latest.heading === null || Number.isNaN(latest.heading)) {
+        headingValue.textContent = '—';
+      } else {
+        headingValue.textContent = `${latest.heading.toFixed(1)}°`;
+      }
+
+      if (latest.latitude === null || latest.longitude === null) {
+        locationValue.textContent = '—';
+      } else {
+        locationValue.textContent = `${latest.latitude.toFixed(4)}, ${latest.longitude.toFixed(4)}`;
+      }
+
+      if (latest.accuracy === null || Number.isNaN(latest.accuracy)) {
+        accuracyValue.textContent = '—';
+      } else {
+        accuracyValue.textContent = `${Math.round(latest.accuracy)} m`;
+      }
 
       phoneWrap.style.transform = `
         rotateX(${(-beta).toFixed(2)}deg)
-        rotateY(${alpha.toFixed(2)}deg)
-        rotateZ(${gamma.toFixed(2)}deg)
+        rotateY(${gamma.toFixed(2)}deg)
+        rotateZ(${alpha.toFixed(2)}deg)
       `;
     }
 
@@ -572,7 +606,8 @@ Tap “Enable Motion” and allow sensor access.
 
     function calibrate() {
       offset = { ...latest };
-      log.textContent = `Recentered.\nCurrent offsets:\nalpha=${offset.alpha.toFixed(1)} beta=${offset.beta.toFixed(1)} gamma=${offset.gamma.toFixed(1)}`;
+      const headingText = latest.heading === null ? 'unavailable' : `${latest.heading.toFixed(1)}°`;
+      log.textContent = `Recentered.\nCurrent offsets:\nalpha=${offset.alpha.toFixed(1)} beta=${offset.beta.toFixed(1)} gamma=${offset.gamma.toFixed(1)}\nCompass heading=${headingText}`;
     }
 
     function onOrientation(event) {
@@ -583,6 +618,37 @@ Tap “Enable Motion” and allow sensor access.
       latest.alpha = event.alpha ?? 0;
       latest.beta = event.beta ?? 0;
       latest.gamma = event.gamma ?? 0;
+
+      if (typeof event.webkitCompassHeading === 'number') {
+        latest.heading = event.webkitCompassHeading;
+      } else if (event.absolute === true && typeof event.alpha === 'number') {
+        latest.heading = (360 - event.alpha + 360) % 360;
+      }
+    }
+
+    function requestLocation() {
+      if (!('geolocation' in navigator)) {
+        locationValue.textContent = 'No GPS';
+        accuracyValue.textContent = '—';
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          latest.latitude = position.coords.latitude;
+          latest.longitude = position.coords.longitude;
+          latest.accuracy = position.coords.accuracy;
+        },
+        () => {
+          locationValue.textContent = 'Denied';
+          accuracyValue.textContent = '—';
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0,
+        }
+      );
     }
 
     async function enableMotion() {
@@ -602,11 +668,13 @@ Tap “Enable Motion” and allow sensor access.
           }
         }
 
+        window.removeEventListener('deviceorientation', onOrientation, true);
         window.addEventListener('deviceorientation', onOrientation, true);
-        setStatus('Motion stream active', 'good');
-        log.textContent = 'Motion access enabled. Rotate your phone slowly and watch the digital twin respond.';
+        requestLocation();
+        setStatus('Sensors active', 'good');
+        log.textContent = 'Sensors enabled. Rotate your phone slowly and watch the digital twin respond. Compass heading and location are best-effort extras.';
       } catch (error) {
-        setStatus('Could not enable motion', 'bad');
+        setStatus('Could not enable sensors', 'bad');
         log.textContent = `Error:\n${error.message}`;
       }
     }
@@ -618,10 +686,10 @@ Tap “Enable Motion” and allow sensor access.
         log.textContent = 'Demo mode is generating synthetic motion so you can preview the twin on devices without sensor access.';
       } else if (motionActive) {
         setStatus('Motion stream active', 'good');
-        log.textContent = 'Demo mode stopped. Using live motion data again.';
+        log.textContent = 'Demo mode stopped. Using live sensor data again.';
       } else {
         setStatus('Waiting for motion permission', 'warn');
-        log.textContent = 'Demo mode stopped. Tap “Enable Motion” to use real sensor data.';
+        log.textContent = 'Demo mode stopped. Tap “Enable Sensors” to use real sensor data.';
       }
     }
 
